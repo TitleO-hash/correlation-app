@@ -41,29 +41,33 @@ DEFAULT_SYMS = {
 }
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_session():
+    try:
+        from curl_cffi import requests as curl_requests
+        return curl_requests.Session(impersonate="chrome110")
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_returns(symbols: tuple, period: str) -> pd.DataFrame:
+    session = get_session()
     frames = {}
     fetch_errors = []
+
     for sym in symbols:
         ysym = to_yahoo(sym)
         try:
-            raw = yf.download(
-                ysym, period=period,
-                progress=False, auto_adjust=True,
-                threads=False, actions=False,
-            )
-            if raw.empty:
+            if session is not None:
+                ticker = yf.Ticker(ysym, session=session)
+            else:
+                ticker = yf.Ticker(ysym)
+            hist = ticker.history(period=period, auto_adjust=True, actions=False)
+            if hist.empty:
                 fetch_errors.append(f"{sym}: no data")
                 continue
-            # Handle both flat and MultiIndex columns
-            if isinstance(raw.columns, pd.MultiIndex):
-                close = raw[("Close", ysym)]
-            elif "Close" in raw.columns:
-                close = raw["Close"]
-            else:
-                close = raw.iloc[:, 3]
-            close = close.dropna()
+            close = hist["Close"].dropna()
             if len(close) > 20:
                 frames[sym] = close
             else:
