@@ -43,27 +43,44 @@ DEFAULT_SYMS = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_returns(symbols: tuple, period: str) -> pd.DataFrame:
-    yahoo_syms = [to_yahoo(s) for s in symbols]
-    sym_map    = dict(zip(yahoo_syms, symbols))
-    try:
-        raw = yf.download(
-            yahoo_syms, period=period,
-            progress=False, auto_adjust=True,
-            threads=False,
-        )
-        if raw.empty:
-            return pd.DataFrame()
-        df = raw["Close"] if "Close" in raw.columns.get_level_values(0) else raw
-        if isinstance(df, pd.Series):
-            df = df.to_frame(name=symbols[0])
-        df.columns = [sym_map.get(str(c), str(c)) for c in df.columns]
-        df = df.dropna(how="all").ffill().dropna()
-        if df.empty or len(df) < 20:
-            return pd.DataFrame()
-        return df.pct_change().dropna()
-    except Exception as e:
-        st.warning(f"Fetch error: {e}")
+    frames = {}
+    fetch_errors = []
+    for sym in symbols:
+        ysym = to_yahoo(sym)
+        try:
+            raw = yf.download(
+                ysym, period=period,
+                progress=False, auto_adjust=True,
+                threads=False, actions=False,
+            )
+            if raw.empty:
+                fetch_errors.append(f"{sym}: no data")
+                continue
+            # Handle both flat and MultiIndex columns
+            if isinstance(raw.columns, pd.MultiIndex):
+                close = raw[("Close", ysym)]
+            elif "Close" in raw.columns:
+                close = raw["Close"]
+            else:
+                close = raw.iloc[:, 3]
+            close = close.dropna()
+            if len(close) > 20:
+                frames[sym] = close
+            else:
+                fetch_errors.append(f"{sym}: only {len(close)} rows")
+        except Exception as e:
+            fetch_errors.append(f"{sym}: {str(e)[:60]}")
+
+    if fetch_errors:
+        st.warning("⚠️ " + "  |  ".join(fetch_errors))
+
+    if len(frames) < 2:
         return pd.DataFrame()
+
+    df = pd.DataFrame(frames).dropna(how="all").ffill().dropna()
+    if len(df) < 20:
+        return pd.DataFrame()
+    return df.pct_change().dropna()
 
 
 def portfolio_stats(returns: pd.DataFrame, weights: np.ndarray, capital: float, z: float):
